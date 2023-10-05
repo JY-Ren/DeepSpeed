@@ -46,7 +46,7 @@ __global__ void fused_ln(T* output,
                              (tb.thread_index().y * elems_per_row);
     const int thread_offset = tb.thread_index().x * T_per_load;
     const int base_offset = block_offset + thread_offset;
-    const int stride = blockDim.x * T_per_load;
+    const int stride = tb.size() * T_per_load;
 
     float sum = reduce::init<rop::Add, float>();
 
@@ -57,6 +57,8 @@ __global__ void fused_ln(T* output,
 #pragma unRoll
     for (int i = 0; i < unRoll; i++) {
         T* iteration_buffer = local_buffer + i * T_per_load;
+        T residual_buffer[T_per_load];
+        T bias_buffer[T_per_load];
 
         mem_access::load_global<ln::granularity>(
             iteration_buffer, input_base + i * stride, thread_offset + i * stride < elems_per_row);
@@ -89,8 +91,8 @@ __global__ void fused_ln(T* output,
     const float variance = mean_diff / elems_per_row;
     const float denom = __frsqrt_rn(variance + epsilon);
 
-    // const T mean_compute = conversion::to<T>(mean);
-    // const T denom_compute = conversion::to<T>(denom);
+    const T mean_compute = conversion::to<T>(mean);
+    const T denom_compute = conversion::to<T>(denom);
 
     T* block_output = output + block_offset;
 
@@ -107,11 +109,8 @@ __global__ void fused_ln(T* output,
 
 #pragma unRoll
         for (int j = 0; j < T_per_load; j++) {
-            float val = conversion::to<float>(iteration_buffer[j]);
-            val = (val - mean) * denom;
-            val =
-                val * conversion::to<float>(gamma_local[j]) + conversion::to<float>(beta_local[j]);
-            iteration_buffer[j] = conversion::to<T>(val);
+            iteration_buffer[j] = (iteration_buffer[j] - mean_compute) * denom_compute;
+            iteration_buffer[j] = iteration_buffer[j] * gamma_local[j] + beta_local[j];
         }
 
         if (do_loads) {
@@ -190,14 +189,16 @@ void launch_fused_ln(T* output,
     }
 }
 
-#define INSTANTIATE_FUSED_LN(T) \
-    template void launch_fused_ln(T*, const T*, const T*, const T*, float, int, int, cudaStream_t);
-
-INSTANTIATE_FUSED_LN(__half);
-#ifdef BF16_AVAILABLE
-INSTANTIATE_FUSED_LN(__nv_bfloat16);
-#endif
-INSTANTIATE_FUSED_LN(float);
+template void launch_fused_ln(__half*,
+                              const __half*,
+                              const __half*,
+                              const __half*,
+                              float,
+                              int,
+                              int,
+                              cudaStream_t);
+template void
+launch_fused_ln(float*, const float*, const float*, const float*, float, int, int, cudaStream_t);
 
 /*
 Fused resiual + bias + layer norm implementation. Assumes elems_per_row % 8
@@ -273,7 +274,7 @@ __global__ void fused_residual_ln(T* output,
             float vals_up_cast = conversion::to<float>(iteration_buffer[j]);
             float res_up_cast = conversion::to<float>(residual_buffer[j]);
             float bias_up_cast = conversion::to<float>(bias_buffer[j]);
-            vals_up_cast = vals_up_cast + bias_up_cast + res_up_cast;
+            vals_up_cast += res_up_cast + bias_up_cast;
             sum = reduce::element<rop::Add>(sum, vals_up_cast);
             iteration_buffer[j] = conversion::to<T>(vals_up_cast);
         }
@@ -304,6 +305,9 @@ __global__ void fused_residual_ln(T* output,
     const float variance = mean_diff / elems_per_row;
     const float denom = __frsqrt_rn(variance + epsilon);
 
+    const T mean_compute = conversion::to<T>(mean);
+    const T denom_compute = conversion::to<T>(denom);
+
     T* block_output = output + block_offset;
 
 #pragma unRoll
@@ -319,13 +323,8 @@ __global__ void fused_residual_ln(T* output,
 
 #pragma unRoll
         for (int j = 0; j < T_per_load; j++) {
-            // iteration_buffer[j] = (iteration_buffer[j] - mean_compute) * denom_compute;
-            // iteration_buffer[j] = iteration_buffer[j] * gamma_local[j] + beta_local[j];
-            float val = conversion::to<float>(iteration_buffer[j]);
-            val = (val - mean) * denom;
-            val =
-                val * conversion::to<float>(gamma_local[j]) + conversion::to<float>(beta_local[j]);
-            iteration_buffer[j] = conversion::to<T>(val);
+            iteration_buffer[j] = (iteration_buffer[j] - mean_compute) * denom_compute;
+            iteration_buffer[j] = iteration_buffer[j] * gamma_local[j] + beta_local[j];
         }
 
         if (do_loads) {
@@ -482,22 +481,50 @@ void launch_fused_residual_ln_store_pre_ln_res(T* norm_output,
     }
 }
 
-#define INSTANTIATE_RES_LN(T)                  \
-    template void launch_fused_residual_ln<T>( \
-        T*, const T*, const T*, const T*, const T*, const T*, float, int, int, cudaStream_t);
+// No-store specializations
+template void launch_fused_residual_ln(__half*,
+                                       const __half*,
+                                       const __half*,
+                                       const __half*,
+                                       const __half*,
+                                       const __half*,
+                                       float,
+                                       int,
+                                       int,
+                                       cudaStream_t);
 
-#define INSTANTIATE_PRE_LN_RES(T)                               \
-    template void launch_fused_residual_ln_store_pre_ln_res<T>( \
-        T*, T*, const T*, const T*, const T*, const T*, const T*, float, int, int, cudaStream_t);
+template void launch_fused_residual_ln(float*,
+                                       const float*,
+                                       const float*,
+                                       const float*,
+                                       const float*,
+                                       const float*,
+                                       float,
+                                       int,
+                                       int,
+                                       cudaStream_t);
 
-INSTANTIATE_RES_LN(__half);
-INSTANTIATE_RES_LN(float);
-#ifdef BF16_AVAILABLE
-INSTANTIATE_RES_LN(__nv_bfloat16);
-#endif
+// Store specializations
+template void launch_fused_residual_ln_store_pre_ln_res(__half*,
+                                                        __half*,
+                                                        const __half*,
+                                                        const __half*,
+                                                        const __half*,
+                                                        const __half*,
+                                                        const __half*,
+                                                        float,
+                                                        int,
+                                                        int,
+                                                        cudaStream_t);
 
-INSTANTIATE_PRE_LN_RES(__half);
-INSTANTIATE_PRE_LN_RES(float);
-#ifdef BF16_AVAILABLE
-INSTANTIATE_PRE_LN_RES(__nv_bfloat16);
-#endif
+template void launch_fused_residual_ln_store_pre_ln_res(float*,
+                                                        float*,
+                                                        const float*,
+                                                        const float*,
+                                                        const float*,
+                                                        const float*,
+                                                        const float*,
+                                                        float,
+                                                        int,
+                                                        int,
+                                                        cudaStream_t);

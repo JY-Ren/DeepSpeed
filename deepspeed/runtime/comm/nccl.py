@@ -9,7 +9,6 @@ import cupy
 import numpy as np
 
 from deepspeed.runtime.compression.cupy import CupyBackend
-from deepspeed.runtime.utils import required_torch_version
 from deepspeed.accelerator import get_accelerator
 
 
@@ -24,7 +23,11 @@ class NcclBackend(object):
         self.rank = dist.get_rank(group=self.world_group)
         self.size = dist.get_world_size(group=self.world_group)
         self.compression_backend = CupyBackend()
-        self.bool_not_supported = required_torch_version(min_version=1.10)
+        self.bool_not_supported = False
+        TORCH_MAJOR = int(torch.__version__.split('.')[0])
+        TORCH_MINOR = int(torch.__version__.split('.')[1])
+        if (TORCH_MAJOR == 1 and TORCH_MINOR >= 10) or TORCH_MAJOR == 2:
+            self.bool_not_supported = True
 
     def my_igather(self, rank, size, group, sendbuf, recvbuf, root):
         req = []
@@ -63,7 +66,7 @@ class NcclBackend(object):
             buffer_m = torch.cat([buffer_m, empty_tensor])
 
         buffer_m.add_(worker_error)
-        worker_scale = torch.linalg.norm(buffer_m) / np.sqrt(buffer_m.numel())
+        worker_scale = torch.norm(buffer_m) / np.sqrt(buffer_m.numel())
         worker_error.set_(buffer_m - worker_scale * buffer_m.sign().add_(1).bool().float().add_(-0.5).mul_(2.0))
 
         if self.bool_not_supported:
@@ -109,7 +112,7 @@ class NcclBackend(object):
             (cupy.unpackbits(cupy_recvbuf_sign.flatten())).reshape(self.size, -1)).float().add_(-0.5).mul_(2.0).mul_(
                 torch.stack(recvbuf_scale).mul_(1 / self.size)).sum(0)
         compensated_server_m.add_(server_error)
-        server_scale = torch.linalg.norm(compensated_server_m) / np.sqrt(compensated_server_m.numel())
+        server_scale = torch.norm(compensated_server_m) / np.sqrt(compensated_server_m.numel())
         server_error.set_(compensated_server_m -
                           server_scale * compensated_server_m.sign().add_(1).bool().float().add_(-0.5).mul_(2.0))
 

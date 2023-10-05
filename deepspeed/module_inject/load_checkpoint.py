@@ -9,10 +9,9 @@ from deepspeed.model_implementations.transformers.ds_gpt import DeepSpeedGPTInfe
 from deepspeed.model_implementations.transformers.ds_bert import DeepSpeedBERTInference
 from deepspeed.model_implementations.transformers.ds_megatron_gpt import DeepSpeedMegatronGPTInference
 from deepspeed.model_implementations.transformers.ds_opt import DeepSpeedOPTInference
-from deepspeed.model_implementations.transformers.ds_llama2 import DeepSpeedLlama2Inference
 
 import deepspeed.ops.transformer as transformer_inference
-from .layers import LinearLayer, Normalize, EmbeddingLayer, OPTEmbedding, RMSNormalize
+from .layers import LinearLayer, Normalize, EmbeddingLayer, OPTEmbedding
 import torch
 import gc
 from deepspeed.accelerator import get_accelerator
@@ -30,13 +29,9 @@ def load_model_with_checkpoint(r_module,
     error_msgs = []
 
     def prefix_check():
-        # if keys start with 'model.' or 'transformer.', don't skip level 0 prefix
+        # if keys start with 'model.', don't skip level 0 prefix
         for key in sd[0].keys():
-            # OPT models
             if re.match("^model[.]", key):
-                return False
-            # BLOOM models
-            if re.match("^transformer[.]", key):
                 return False
         return True
 
@@ -180,26 +175,8 @@ def load_model_with_checkpoint(r_module,
     try:
         import transformers
         OPTLearnedPositionalEmbedding = transformers.models.opt.modeling_opt.OPTLearnedPositionalEmbedding
-        if hasattr(transformers.models, "llama"):
-            LlamaRMSNorm = transformers.models.llama.modeling_llama.LlamaRMSNorm
-        else:
-            LlamaRMSNorm = None
     except:
         OPTLearnedPositionalEmbedding = None
-    try:
-        from fairscale.nn.model_parallel.layers import (
-            ColumnParallelLinear,
-            ParallelEmbedding,
-            RowParallelLinear,
-        )
-    except:
-        ColumnParallelLinear = None
-        ParallelEmbedding = None
-        RowParallelLinear = None
-    try:
-        from llama.model import RMSNorm
-    except:
-        RMSNorm = None
     layer_policies = {
         nn.Linear: load,
         nn.Embedding: load,
@@ -213,15 +190,8 @@ def load_model_with_checkpoint(r_module,
         DeepSpeedBERTInference: load_transformer_layer,
         DeepSpeedMegatronGPTInference: load_transformer_layer,
         DeepSpeedOPTInference: load_transformer_layer,
-        DeepSpeedLlama2Inference: load_transformer_layer,
         OPTLearnedPositionalEmbedding: load,
-        OPTEmbedding: load,
-        LlamaRMSNorm: load,
-        RMSNormalize: load,
-        ColumnParallelLinear: load,
-        ParallelEmbedding: load,
-        RowParallelLinear: load,
-        RMSNorm: load
+        OPTEmbedding: load
     }
 
     all_ds_ids = {}
@@ -248,16 +218,11 @@ def load_model_with_checkpoint(r_module,
                     if child.__class__ is nn.LayerNorm:
                         child = Normalize(dim=ds_shape[-1], dtype=child.weight.dtype, eps=child.eps)
                         setattr(module, name, child)
-                    elif child.__class__ in [nn.Linear, ColumnParallelLinear, RowParallelLinear]:
+                    elif child.__class__ is nn.Linear:
                         child = LinearLayer(weight_shape=child.weight.shape, bias=child.bias)
                         setattr(module, name, child)
                     elif child.__class__ is OPTLearnedPositionalEmbedding:
                         child = OPTEmbedding(weight_shape=ds_shape)
-                        setattr(module, name, child)
-                    elif child.__class__ in [LlamaRMSNorm, RMSNorm]:
-                        child = RMSNormalize(dim=ds_shape[-1],
-                                             dtype=child.weight.dtype,
-                                             eps=child.eps if hasattr(child, 'eps') else child.variance_epsilon)
                         setattr(module, name, child)
                     else:
                         ds_id = None
@@ -276,6 +241,7 @@ def load_model_with_checkpoint(r_module,
                     level + 1)
 
     load_module_recursive(r_module)
+
     embedding_weight = None
 
     for n, p in r_module.named_parameters():
@@ -283,7 +249,6 @@ def load_model_with_checkpoint(r_module,
             embedding_weight = p
     if embedding_weight is not None and r_module.lm_head.weight.is_meta:
         r_module.lm_head.weight = embedding_weight
-
     for sd_ in sd:
         del sd_
     sd = None

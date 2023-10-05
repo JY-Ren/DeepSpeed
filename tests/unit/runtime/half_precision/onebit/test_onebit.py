@@ -8,6 +8,7 @@ import torch.nn as nn
 import deepspeed.comm as dist
 import deepspeed
 import pytest
+import copy
 import os
 import numpy as np
 
@@ -17,12 +18,12 @@ from deepspeed.runtime.pipe.module import PipelineModule
 from unit.common import DistributedTest
 from unit.simple_model import SimpleModel, random_dataloader
 from unit.alexnet_model import AlexNetPipe, train_cifar
-from deepspeed.runtime.utils import required_torch_version
+from unit.util import required_minimum_torch_version
 from deepspeed.accelerator import get_accelerator
 
 PipeTopo = PipeDataParallelTopology
 
-if not required_torch_version(min_version=1.8):
+if not required_minimum_torch_version(major_version=1, minor_version=8):
     pytest.skip(
         "NCCL-based 1-bit compression requires torch 1.8 or higher",
         allow_module_level=True,
@@ -334,8 +335,16 @@ class TestOneBitAdamCheckpointing(DistributedTest):
     "topo_config",
     [
         {
+            "num_pp": 1,
+            "num_dp": 4
+        },
+        {
             "num_pp": 2,
             "num_dp": 2
+        },
+        {
+            "num_pp": 4,
+            "num_dp": 1
         },
     ],
 )
@@ -344,8 +353,8 @@ class TestOneBitAdamFP16Pipeline(DistributedTest):
 
     def test(self, topo_config):
         config_dict = {
-            "train_batch_size": 4,
-            "grandient_accumulation_steps": 1,
+            "train_batch_size": 16,
+            "train_micro_batch_size_per_gpu": 4,
             "steps_per_print": 20,
             "optimizer": {
                 "type": "OneBitAdam",
@@ -375,12 +384,20 @@ class TestOneBitAdamFP16Pipeline(DistributedTest):
         }
 
         topo = PipeTopo(**topo_config)
-        steps = 100
+        steps = 500  # Must be >=100
 
-        # TODO: Add correctness tests/asserts comparing with baseline?
-        test_net = AlexNetPipe()
+        # Allocate model for consistent initial weights.
+        init_net = AlexNetPipe()
+
+        test_net = copy.deepcopy(init_net)
         test_model = PipelineModule(layers=test_net.to_layers(), topology=topo, loss_fn=nn.CrossEntropyLoss())
-        test_losses = train_cifar(test_model, config=config_dict, num_steps=steps, fp16=config_dict['fp16']['enabled'])
+
+        test_losses = train_cifar(
+            test_model,
+            config=config_dict,
+            num_steps=steps,
+            fp16=config_dict["fp16"]["enabled"],
+        )
 
 
 @pytest.mark.parametrize("dtype", [torch.float32, torch.float16], ids=["fp32", "fp16"])
@@ -691,8 +708,16 @@ class TestZeroOneAdamCheckpointing(DistributedTest):
     "topo_config",
     [
         {
+            "num_pp": 1,
+            "num_dp": 4
+        },
+        {
             "num_pp": 2,
             "num_dp": 2
+        },
+        {
+            "num_pp": 4,
+            "num_dp": 1
         },
     ],
 )
@@ -701,8 +726,8 @@ class TestZeroOneAdamFP16Pipeline(DistributedTest):
 
     def test(self, topo_config):
         config_dict = {
-            "train_batch_size": 4,
-            "grandient_accumulation_steps": 1,
+            "train_batch_size": 16,
+            "train_micro_batch_size_per_gpu": 4,
             "steps_per_print": 20,
             "optimizer": {
                 "type": "ZeroOneAdam",
@@ -735,12 +760,20 @@ class TestZeroOneAdamFP16Pipeline(DistributedTest):
         }
 
         topo = PipeTopo(**topo_config)
-        steps = 100
+        steps = 500  # Must be >=100
 
-        # TODO: Add correctness tests/asserts comparing with baseline?
-        test_net = AlexNetPipe()
+        # Allocate model for consistent initial weights.
+        init_net = AlexNetPipe()
+
+        test_net = copy.deepcopy(init_net)
         test_model = PipelineModule(layers=test_net.to_layers(), topology=topo, loss_fn=nn.CrossEntropyLoss())
-        test_losses = train_cifar(test_model, config=config_dict, num_steps=steps, fp16=config_dict['fp16']['enabled'])
+
+        test_losses = train_cifar(
+            test_model,
+            config=config_dict,
+            num_steps=steps,
+            fp16=config_dict["fp16"]["enabled"],
+        )
 
 
 @pytest.mark.parametrize("dtype", [torch.float32, torch.float16], ids=["fp32", "fp16"])
@@ -1077,8 +1110,16 @@ class TestOneBitLambCheckpointing(DistributedTest):
     "topo_config",
     [
         {
+            "num_pp": 1,
+            "num_dp": 4
+        },
+        {
             "num_pp": 2,
             "num_dp": 2
+        },
+        {
+            "num_pp": 4,
+            "num_dp": 1
         },
     ],
 )
@@ -1087,8 +1128,8 @@ class TestOneBitLambFP16Pipeline(DistributedTest):
 
     def test(self, topo_config):
         config_dict = {
-            "train_batch_size": 4,
-            "grandient_accumulation_steps": 1,
+            "train_batch_size": 16,
+            "train_micro_batch_size_per_gpu": 4,
             "steps_per_print": 20,
             "optimizer": {
                 "type": "OneBitLamb",
@@ -1118,12 +1159,20 @@ class TestOneBitLambFP16Pipeline(DistributedTest):
         }
 
         topo = PipeTopo(**topo_config)
-        steps = 100
+        steps = 500  # Must be >=100
 
-        # TODO: Add correctness tests/asserts comparing with baseline?
-        test_net = AlexNetPipe()
+        # Allocate model for consistent initial weights.
+        init_net = AlexNetPipe()
+
+        test_net = copy.deepcopy(init_net)
         test_model = PipelineModule(layers=test_net.to_layers(), topology=topo, loss_fn=nn.CrossEntropyLoss())
-        test_losses = train_cifar(test_model, config=config_dict, num_steps=steps, fp16=config_dict['fp16']['enabled'])
+
+        test_losses = train_cifar(
+            test_model,
+            config=config_dict,
+            num_steps=steps,
+            fp16=config_dict["fp16"]["enabled"],
+        )
 
 
 @pytest.mark.sequential

@@ -13,10 +13,6 @@ class DeepSpeedAccelerator(ABC):
         self._name = None
         self._communication_backend_name = None
 
-    @abc.abstractmethod
-    def is_synchronized_device(self):
-        ...
-
     # Device APIs
     @abc.abstractmethod
     def device_name(self, device_index):
@@ -156,10 +152,6 @@ class DeepSpeedAccelerator(ABC):
     def is_fp16_supported(self):
         ...
 
-    @abc.abstractmethod
-    def supported_dtypes(self):
-        ...
-
     # Misc
     @abc.abstractmethod
     def amp(self):
@@ -183,10 +175,6 @@ class DeepSpeedAccelerator(ABC):
 
     @abc.abstractmethod
     def communication_backend_name(self):
-        ...
-
-    @abc.abstractmethod
-    def is_triton_supported(self):
         ...
 
     # Tensor operations
@@ -226,11 +214,7 @@ class DeepSpeedAccelerator(ABC):
         ...
 
     @abc.abstractmethod
-    def pin_memory(self, tensor, align_bytes=1):
-        ...
-
-    @abc.abstractmethod
-    def is_pinned(self, tensor):
+    def pin_memory(self, tensor):
         ...
 
     @abc.abstractmethod

@@ -5,7 +5,6 @@
 
 from .base import *
 from .features.meta_tensor import MetaTensorContainer
-from .features.split_qkv import HybridSplitQKVContainer
 from deepspeed.model_implementations.transformers.ds_gpt import DeepSpeedGPTInference
 import torch
 from torch.nn.parameter import Parameter
@@ -14,10 +13,8 @@ from ..policy import transformer_param_names
 from ..policy import maybe_copy
 from ..policy import maybe_copy_qkv
 
-from ..policy import maybe_get_lora
 
-
-class DS_GPTNEOContainer(MetaTensorContainer, HybridSplitQKVContainer, BaseTransformerContainer):
+class DS_GPTNEOContainer(MetaTensorContainer, BaseTransformerContainer):
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
@@ -29,38 +26,6 @@ class DS_GPTNEOContainer(MetaTensorContainer, HybridSplitQKVContainer, BaseTrans
         self.module = DeepSpeedGPTInference(_config, mp_group=self.mp_group)
         self.module.config.scale_attention = self.scale_attention
         return self.module
-
-    def set_lora_params(self):
-        """
-        Necessary to implement for `HybridEngineContainer`
-        """
-        self.lora_params = [
-            maybe_get_lora(p) for p in [
-                self.policy.client_module.mlp.c_fc, self.policy.client_module.mlp.c_proj,
-                self.policy.client_module.attn.attention.q_proj, self.policy.client_module.attn.attention.k_proj,
-                self.policy.client_module.attn.attention.v_proj, self.policy.client_module.attn.attention.out_proj
-            ]
-        ]
-
-    def set_q_k_v(self):
-        """
-        Necessary to implement for `HybridSplitQKVContainer`
-        """
-        self.qw = self.policy.client_module.attn.attention.q_proj.weight
-        self.qb = None
-        self.kw = self.policy.client_module.attn.attention.k_proj.weight
-        self.kb = None
-        self.vw = self.policy.client_module.attn.attention.v_proj.weight
-        self.vb = None
-
-    def get_lora_matched_pair(self):
-        """
-        Necessary to implement for `HybridEngineContainer`
-        """
-        fc1_lora, fc2_lora, q_lora, k_lora, v_lora, out_lora = self.get_lora_params()
-        ret = [(fc1_lora, self._h4h_w), (fc2_lora, self._4hh_w), (out_lora, self.dense_w), (q_lora, self.qw),
-               (k_lora, self.kw), (v_lora, self.vw)]
-        return ret
 
     def load_params(self, module, sd, weight_quantizer, mp_replace, prefix):
         param_names = (
@@ -107,18 +72,12 @@ class HFGPTNEOLayerPolicy(TransformerPolicy):
             HFGPTNEOLayerPolicy._orig_layer_class = None
 
     def get_hidden_heads(self):
-        return self.client_module.attn.attention.embed_dim, \
+        return self.client_module.attn.attention.q_proj.weight.shape[1], \
                 self.client_module.attn.attention.num_heads, \
-                self.client_module.ln_1.eps, \
-                DEFAULT_INTERMEDIATE_SIZE
+                self.client_module.ln_1.eps
 
     def get_q_k_v(self):
-        return self.client_module.attn.attention.q_proj.weight, \
-               None, \
-               self.client_module.attn.attention.k_proj.weight, \
-               None, \
-               self.client_module.attn.attention.v_proj.weight, \
-               None
+        return None
 
     def attention(self, enable_training=False):
         qw = self.client_module.attn.attention.q_proj.weight
@@ -132,7 +91,7 @@ class HFGPTNEOLayerPolicy(TransformerPolicy):
                self.client_module.attn.attention.out_proj.weight, \
                self.client_module.attn.attention.out_proj.bias
 
-    def mlp(self, enable_training=False):
+    def mlp(self):
         return self.client_module.mlp.c_fc.weight, \
                self.client_module.mlp.c_fc.bias, \
                self.client_module.mlp.c_proj.weight, \
@@ -143,3 +102,6 @@ class HFGPTNEOLayerPolicy(TransformerPolicy):
                self.client_module.ln_2.bias, \
                self.client_module.ln_1.weight, \
                self.client_module.ln_1.bias
+
+    def get_lora_params(self):
+        return []

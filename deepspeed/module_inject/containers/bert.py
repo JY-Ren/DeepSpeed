@@ -18,7 +18,6 @@ class DS_BERTContainer(BaseTransformerContainer):
         # All model specific things should be defined here instead of the base class.
         self.return_tuple = True
         self.triangular_masking = False
-        self.use_triton = kwargs['config'].use_triton and deepspeed.HAS_TRITON
 
     def create_module(self, config=None):
         _config = config if config is not None else self.ds_model_config
@@ -51,8 +50,10 @@ class HFBertLayerPolicy(TransformerPolicy):
             attention_layernorm = self.client_module.attention.output.LayerNorm
         return self.client_module.attention.self.query.weight.shape[1], \
                 self.client_module.attention.self.num_attention_heads, \
-                attention_layernorm.eps, \
-                DEFAULT_INTERMEDIATE_SIZE
+                attention_layernorm.eps
+
+    def get_q_k_v(self):
+        return None
 
     def attention(self, enable_training=False):
         qw = self.client_module.attention.self.query.weight
@@ -70,7 +71,7 @@ class HFBertLayerPolicy(TransformerPolicy):
                self.client_module.attention.output.dense.weight, \
                self.client_module.attention.output.dense.bias, \
 
-    def mlp(self, enable_training=False):
+    def mlp(self):
         if self.pre_attn_norm:
             intermediate_ff = self.client_module.intermediate.dense_act
         else:
@@ -91,3 +92,6 @@ class HFBertLayerPolicy(TransformerPolicy):
                attention_layernorm.bias, \
                transformer_layernorm.weight, \
                transformer_layernorm.bias
+
+    def get_lora_params(self):
+        return []
